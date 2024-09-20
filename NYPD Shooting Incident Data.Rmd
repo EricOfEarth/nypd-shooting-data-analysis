@@ -1,0 +1,150 @@
+---
+title: "NYPD Shooting Incident Data"
+author: "Eric Schaffer"
+date: "2024-09-08"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(usmap)
+library(ggpubr)
+library(ggplot2)
+library(forcats)
+```
+
+## Abstract
+This data is a list of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year.
+
+This is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity. 
+
+## Import NYPD Shooting Incident Data
+
+```{r import}
+# import the data and conver the missing values to NA
+raw_data <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD", na.strings = c("", " ", "(null)", "UNKNOWN"))
+```
+
+## Inspect Data
+
+Intial view of the raw data to determine data shape and quality for the tidying step
+
+```{r inspect}
+head(raw_data)
+
+summary(raw_data)
+```
+
+## Tidy Data
+
+To tidy the NYPD Shooting data set I first converted the date and time columns into a date time column, converted the murder flag column into a logical boolean column, and created factors for the categorical columns. I removed the columns that had non-categorical or numerical data that would be difficult to analyze or was missing a lot of data like the location description and classification columns. Finally, I removed the small number (~60) rows that were missing either location data or a jurisdiction code. As part of this tidying I notices that the classifcation data for the perpetrator has a lot of missing data compared to the victims. I attribute this to the fact that the perpetrator may not have been aprehended or present at the scene when the report was captured. Any analysis on the perpetrators will need to highlight that the majority of the data is missing.
+
+```{r clean}
+
+NYPD_Data <- raw_data %>%
+  # convert the date and time columns into a single datetime column
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  unite(OCCUR_DATETIME, sep = " ", OCCUR_DATE:OCCUR_TIME) %>%
+  mutate(OCCUR_DATETIME = as_datetime(OCCUR_DATETIME)) %>%
+  # convert the murder flag to a boolean
+  mutate(STATISTICAL_MURDER_FLAG = as.logical(STATISTICAL_MURDER_FLAG))%>%
+  # remove columns that have data non-categorical or numerical data
+  subset(select = -c(LOC_OF_OCCUR_DESC, LOCATION_DESC, LOC_CLASSFCTN_DESC, X_COORD_CD, Y_COORD_CD)) %>%
+  # remove rows that don't have location data or a jurisdiction code (there are only a small number of these)
+  filter(!is.na(Latitude)) %>%
+  filter(!is.na(JURISDICTION_CODE)) %>%
+  # Create factors for categorical data
+  mutate(BORO = as.factor(BORO)) %>%
+  mutate(PRECINCT = as.factor(PRECINCT)) %>%
+  mutate(PERP_AGE_GROUP = factor(PERP_AGE_GROUP, levels = c("<18", "18-24", "25-44", "45-64", "65+"))) %>%
+  mutate(VIC_AGE_GROUP =  factor(VIC_AGE_GROUP, levels = c("<18", "18-24", "25-44", "45-64", "65+"))) %>%
+  mutate(PERP_SEX = as.factor(PERP_SEX)) %>%
+  mutate(PERP_RACE = as.factor(PERP_RACE)) %>%
+  mutate(VIC_SEX = as.factor(VIC_SEX)) %>%
+  mutate(VIC_RACE = as.factor(VIC_RACE)) %>%
+  mutate(JURISDICTION_CODE = as.factor(JURISDICTION_CODE))
+  
+head(NYPD_Data)
+
+summary(NYPD_Data)
+
+```
+## Analysis
+
+
+```{r analysis, fig.width=14}
+
+# Graph of the sum of shootings by borough and by victim race
+
+ggplot(NYPD_Data, aes(y = BORO)) + 
+  geom_bar(aes(fill = VIC_RACE))
+
+NYPD_Data_by_Boro <- NYPD_Data %>%
+  group_by(BORO) %>%
+  summarise(incidents = n())
+
+# Graph of the shootings by time of day
+
+NYPD_Data_by_time <- NYPD_Data %>%
+  mutate(HOUR_OF_DAY = hour(OCCUR_DATETIME)) %>%
+  group_by(HOUR_OF_DAY) %>%
+  summarise(incidents = n())
+
+ggplot(NYPD_Data_by_time, aes(x = HOUR_OF_DAY, y = incidents)) + 
+  geom_line()
+
+```
+For the visualizations I first plotted the number of shootings by borough and the race of the victim. As previously stated the race of the perpetrator has a lot of missing data and to do that comparison I would need to limit the data set down to incidents that had perpetrator details. This visualization shows that Brooklyn and the Bronx have the most number of incidents and that most of of the victims were Black. An additional investigation would be to see if the number of incidents that resulted in death would show the same pattern by borough. It could be that the more active areas don't necessisarily result in the most deaths.
+
+For the second visualization I plotted the time of day agains the incidents to see if there was a relationship. What I can see from the results is that mid morning has the fewest incidents with the peak being late at night / early in the morning. A further investigation could be to see if this relationship changes throughout the year. There could be months or seasons where the pattern of time-of-day changes.
+
+# Model
+
+For the modeling portion I have decided to use a linear regression model to predict the number of shootings per precinct using the number of deaths To do this I first had to create a new data set grouped by precinct and summarized by the number of shootings and the number of deaths. I then created a model, added the predictions to the data set and plotted the results.
+
+```{r}
+# create a new data set that summarizes the number of incidents and the number of murders by the precinct
+NYPD_Data2 <- NYPD_Data %>%
+  group_by(PRECINCT) %>%
+  summarise(incidents = n(), across(STATISTICAL_MURDER_FLAG, sum)) 
+
+# create a model to predict the number of incidents based upon the number of murders
+mod = lm(incidents ~ STATISTICAL_MURDER_FLAG, data = NYPD_Data2) 
+
+summary(mod)
+
+# add the prediction back into the dataset
+NYPD_Data2 <- NYPD_Data2 %>%
+  ungroup() %>%
+  mutate(pred = predict(mod))
+
+head(NYPD_Data2)
+
+# Graph the actual and the model prediction
+ggplot(NYPD_Data2, aes(x = STATISTICAL_MURDER_FLAG)) +
+  geom_line(aes(y = incidents, color = "actual" )) +
+  geom_line(aes(y = pred, color = "prediction")) +
+  ggtitle("Relationship Between Shootings and Deaths by Precinct") +
+  xlab("Deaths") + 
+  ylab("Shootings") +
+  scale_colour_manual("", 
+                      breaks = c("actual", "prediction"),
+                      values = c("blue", "red"))
+```
+
+The results show that the linear regression model does a pretty good job of the prediction.
+
+# Conclusion
+
+In conclusion, this analysis of the NYPD shooting incidents data shows that there are boroughs that have higher rates of shootings, that the victims are mostly black, and that late evening and very early morning are more violent than during the day. Regarding bias, there can be questions about how this data was collected, what was included, and what was left out. The reporting could also be inconsistent between the precincts which could lead to elevated numbers in certain boroughs. Any conclusions being drawn from this dataset, that could be used to make decisions impacting laws, law enforcement, and the lives of people in these neighborhoods would need to highlight the potental sources of bias.
+
+## Appendix
+
+```{r appendix}
+sessionInfo()
+```
+
