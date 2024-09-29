@@ -95,7 +95,8 @@ NYPD_Data_by_time <- NYPD_Data %>%
   summarise(incidents = n())
 
 ggplot(NYPD_Data_by_time, aes(x = HOUR_OF_DAY, y = incidents)) + 
-  geom_line()
+  geom_line() + 
+  scale_x_continuous(breaks = seq(1,23, by = 1))
 
 ```
 For the visualizations I first plotted the number of shootings by borough and the race of the victim. As previously stated the race of the perpetrator has a lot of missing data and to do that comparison I would need to limit the data set down to incidents that had perpetrator details. This visualization shows that Brooklyn and the Bronx have the most number of incidents and that most of of the victims were Black. An additional investigation would be to see if the number of incidents that resulted in death would show the same pattern by borough. It could be that the more active areas don't necessisarily result in the most deaths.
